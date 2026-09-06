@@ -80,29 +80,16 @@ To test on a physical smartphone on your local Wi-Fi:
 
 ---
 
-## 🌐 Production Deployment (GitHub Pages)
+## 🌐 Live Production Deployment (GitHub Pages)
 
-Deploying to **GitHub Pages** gives you a free, permanent HTTPS URL for mobile AR:
+Your WebAR application is hosted live at:
+```text
+https://avinesh-10.github.io/AR-Creator/
+```
 
-1. Create a new repository on [GitHub](https://github.com/new) named `custom-webar`.
-2. Push this project to GitHub:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial release of Custom WebAR QR-Code 3D system"
-   git branch -M main
-   git remote add origin https://github.com/YOUR-USERNAME/custom-webar.git
-   git push -u origin main
-   ```
-3. In your GitHub repository:
-   - Go to **Settings** → **Pages**.
-   - Under **Build and deployment** → **Source**, select `Deploy from a branch`.
-   - Select branch: `main` and folder `/ (root)`.
-   - Click **Save**.
-4. Your site will be published at:
-   ```text
-   https://YOUR-USERNAME.github.io/custom-webar/
-   ```
+- **Landing Page**: `https://avinesh-10.github.io/AR-Creator/`
+- **AR Generator Studio**: `https://avinesh-10.github.io/AR-Creator/generator.html`
+- **AR Camera Viewer**: `https://avinesh-10.github.io/AR-Creator/ar.html?id=helicopter`
 
 ---
 

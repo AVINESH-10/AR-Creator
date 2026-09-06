@@ -20,6 +20,9 @@ export const AR_CONFIG = {
   // Tracking state decay timeout (ms) before marking as lost
   trackingLostTimeoutMs: 600,
 
+  // Default hosted Base URL
+  hostedBaseUrl: "https://avinesh-10.github.io/AR-Creator/ar.html",
+
   // Default AR transformation offsets
   defaults: {
     scale: 1.0,

@@ -46,6 +46,7 @@ export class ArExperience {
   parseUrlParams() {
     const params = new URLSearchParams(window.location.search);
     if (params.has('id')) this.modelId = params.get('id');
+    if (params.has('modelUrl')) this.customModelUrl = params.get('modelUrl');
 
     const preset = AR_CONFIG.models[this.modelId] || AR_CONFIG.models.helicopter;
     if (preset) {
@@ -206,8 +207,8 @@ export class ArExperience {
   async load3dModel() {
     this.showLoading(true, 15, "Loading 3D Model...");
     try {
-      const blobUrl = getModelBlobUrl(this.modelId);
-      const model = await this.modelLoader.load(blobUrl, (percent) => {
+      const modelSourceUrl = this.customModelUrl || getModelBlobUrl(this.modelId);
+      const model = await this.modelLoader.load(modelSourceUrl, (percent) => {
         this.showLoading(true, percent, "Loading 3D Model...");
       });
 
@@ -218,7 +219,7 @@ export class ArExperience {
     } catch (err) {
       console.error("Failed to load model:", err);
       this.showLoading(false);
-      this.showError("Failed to load 3D model. Please verify GLB asset.");
+      this.showError("Failed to load 3D model. Please verify GLB asset URL and format.");
     }
   }
 

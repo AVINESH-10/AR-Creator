@@ -45,7 +45,9 @@ export class GeneratorStudio {
 
     // Controls
     this.modelSelect = document.getElementById('model-select');
+    this.modelUrlInput = document.getElementById('input-model-url');
     this.fileInput = document.getElementById('file-upload');
+    this.uploadHint = document.getElementById('upload-status-hint');
     this.scaleInput = document.getElementById('ctrl-scale');
     this.scaleVal = document.getElementById('val-scale');
     this.heightInput = document.getElementById('ctrl-height');
@@ -66,7 +68,7 @@ export class GeneratorStudio {
     this.btnDownloadPng = document.getElementById('btn-download-qr-png');
     this.btnLaunchAr = document.getElementById('btn-launch-ar');
 
-    // Set default base URL for AR
+    // Set default base URL for AR (prioritizing hosted GitHub Pages)
     const currentOrigin = window.location.origin;
     let currentPath = window.location.pathname;
     if (currentPath.endsWith('generator.html') || currentPath.endsWith('index.html')) {
@@ -74,7 +76,14 @@ export class GeneratorStudio {
     } else if (!currentPath.endsWith('/')) {
       currentPath += '/';
     }
-    this.defaultBaseUrl = `${currentOrigin}${currentPath}ar.html`;
+    
+    // Default to hosted GitHub Pages URL or current origin
+    if (currentOrigin.includes('github.io')) {
+      this.defaultBaseUrl = `${currentOrigin}${currentPath}ar.html`;
+    } else {
+      this.defaultBaseUrl = AR_CONFIG.hostedBaseUrl || `${currentOrigin}${currentPath}ar.html`;
+    }
+
     if (this.baseUrlInput) {
       this.baseUrlInput.value = this.defaultBaseUrl;
     }
@@ -139,12 +148,36 @@ export class GeneratorStudio {
     // Preset model selector
     this.modelSelect?.addEventListener('change', (e) => {
       this.selectedModelId = e.target.value;
+      this.remoteModelUrl = null;
+      if (this.modelUrlInput) this.modelUrlInput.value = '';
+      if (this.uploadHint) this.uploadHint.style.display = 'none';
+
       if (this.customModelBlobUrl) {
         URL.revokeObjectURL(this.customModelBlobUrl);
         this.customModelBlobUrl = null;
       }
       this.loadPresetModel(this.selectedModelId);
       this.generateQrCode();
+    });
+
+    // Direct Remote Model URL Input (.glb)
+    this.modelUrlInput?.addEventListener('input', (e) => {
+      const url = e.target.value.trim();
+      if (url.length > 5 && (url.startsWith('http://') || url.startsWith('https://'))) {
+        this.remoteModelUrl = url;
+        this.selectedModelId = 'custom';
+        if (this.uploadHint) {
+          this.uploadHint.style.display = 'block';
+          this.uploadHint.innerHTML = '🌐 <span style="color:#34d399;">Remote Model URL linked</span> for AR QR code.';
+        }
+        this.loadModelFromUrl(this.remoteModelUrl, "Remote GLB Model");
+        this.generateQrCode();
+      } else if (url.length === 0) {
+        this.remoteModelUrl = null;
+        if (this.uploadHint) this.uploadHint.style.display = 'none';
+        this.loadPresetModel(this.selectedModelId === 'custom' ? 'helicopter' : this.selectedModelId);
+        this.generateQrCode();
+      }
     });
 
     // Custom File Upload
@@ -163,6 +196,12 @@ export class GeneratorStudio {
 
       this.customModelBlobUrl = URL.createObjectURL(file);
       this.selectedModelId = 'custom';
+      
+      if (this.uploadHint) {
+        this.uploadHint.style.display = 'block';
+        this.uploadHint.innerHTML = `✅ <strong>${file.name}</strong> loaded in 3D preview!<br><span style="color:#94a3b8;">For mobile AR, add this file to your GitHub repository <code>models/</code> folder or paste its raw URL above.</span>`;
+      }
+
       this.loadModelFromUrl(this.customModelBlobUrl, file.name);
       this.generateQrCode();
     });
@@ -324,6 +363,9 @@ export class GeneratorStudio {
 
     const url = new URL(baseUrl, window.location.href);
     url.searchParams.set('id', this.selectedModelId);
+    if (this.remoteModelUrl) {
+      url.searchParams.set('modelUrl', this.remoteModelUrl);
+    }
     url.searchParams.set('scale', this.config.scale.toFixed(2));
     url.searchParams.set('height', this.config.height.toFixed(2));
     if (this.config.offsetX !== 0) url.searchParams.set('ox', this.config.offsetX.toFixed(2));
