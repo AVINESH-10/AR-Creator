@@ -1,0 +1,488 @@
+/**
+ * AR Experience Studio & QR Code Generator
+ * Provides 3D GLB previewing with OrbitControls, interactive scale/height/rotation tuning,
+ * GLB file upload handling, and high-resolution printable QR code generation.
+ */
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { ModelLoader } from './model-loader.js';
+import { AR_CONFIG } from './config.js';
+import { getModelBlobUrl } from './procedural-models.js';
+
+export class GeneratorStudio {
+  constructor() {
+    this.selectedModelId = 'helicopter';
+    this.customModelBlobUrl = null;
+    this.modelLoader = new ModelLoader();
+    this.previewModel = null;
+    this.clock = new THREE.Clock();
+
+    // Configuration values
+    this.config = {
+      scale: AR_CONFIG.defaults.scale,
+      height: AR_CONFIG.defaults.height,
+      offsetX: AR_CONFIG.defaults.offsetX,
+      offsetZ: AR_CONFIG.defaults.offsetZ,
+      rotationY: AR_CONFIG.defaults.rotationY,
+      autoRotate: AR_CONFIG.defaults.autoRotate,
+      autoRotateSpeed: AR_CONFIG.defaults.autoRotateSpeed
+    };
+
+    // Initialize 3D Viewport and UI
+    this.initElements();
+    this.initThree();
+    this.bindEvents();
+    this.loadPresetModel(this.selectedModelId);
+    this.generateQrCode();
+  }
+
+  initElements() {
+    this.container = document.getElementById('preview-canvas-container');
+    this.loadingOverlay = document.getElementById('preview-loading');
+    this.loadingBar = document.getElementById('preview-progress-bar');
+    this.loadingText = document.getElementById('preview-progress-text');
+
+    // Controls
+    this.modelSelect = document.getElementById('model-select');
+    this.fileInput = document.getElementById('file-upload');
+    this.scaleInput = document.getElementById('ctrl-scale');
+    this.scaleVal = document.getElementById('val-scale');
+    this.heightInput = document.getElementById('ctrl-height');
+    this.heightVal = document.getElementById('val-height');
+    this.offsetXInput = document.getElementById('ctrl-offset-x');
+    this.offsetXVal = document.getElementById('val-offset-x');
+    this.offsetZInput = document.getElementById('ctrl-offset-z');
+    this.offsetZVal = document.getElementById('val-offset-z');
+    this.rotationInput = document.getElementById('ctrl-rotation');
+    this.rotationVal = document.getElementById('val-rotation');
+    this.autoRotateInput = document.getElementById('ctrl-auto-rotate');
+    this.resetBtn = document.getElementById('btn-reset-params');
+
+    // QR Output
+    this.baseUrlInput = document.getElementById('input-base-url');
+    this.qrCanvas = document.getElementById('qr-output-canvas');
+    this.qrUrlText = document.getElementById('qr-url-text');
+    this.btnDownloadPng = document.getElementById('btn-download-qr-png');
+    this.btnLaunchAr = document.getElementById('btn-launch-ar');
+
+    // Set default base URL for AR
+    const currentOrigin = window.location.origin;
+    let currentPath = window.location.pathname;
+    if (currentPath.endsWith('generator.html') || currentPath.endsWith('index.html')) {
+      currentPath = currentPath.substring(0, currentPath.lastIndexOf('/') + 1);
+    } else if (!currentPath.endsWith('/')) {
+      currentPath += '/';
+    }
+    this.defaultBaseUrl = `${currentOrigin}${currentPath}ar.html`;
+    if (this.baseUrlInput) {
+      this.baseUrlInput.value = this.defaultBaseUrl;
+    }
+  }
+
+  initThree() {
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x0b0f19);
+
+    const width = this.container.clientWidth || 600;
+    const height = this.container.clientHeight || 450;
+
+    this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+    this.camera.position.set(2.2, 1.8, 2.5);
+
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer.setSize(width, height);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.container.appendChild(this.renderer.domElement);
+
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.05;
+    this.controls.maxPolarAngle = Math.PI / 2 + 0.1; // Don't go below floor
+    this.controls.minDistance = 0.8;
+    this.controls.maxDistance = 8.0;
+    this.controls.target.set(0, 0.3, 0);
+
+    // Add PBR lighting
+    ModelLoader.setupLighting(this.scene);
+
+    // Add marker representation plane
+    this.markerPlane = ModelLoader.createMarkerPreviewPlane(1.2);
+    this.scene.add(this.markerPlane);
+
+    // Anchor group for preview model
+    this.anchorGroup = new THREE.Group();
+    this.scene.add(this.anchorGroup);
+
+    // Handle resize
+    window.addEventListener('resize', () => this.onResize());
+
+    // Start render loop
+    this.animate = this.animate.bind(this);
+    requestAnimationFrame(this.animate);
+  }
+
+  onResize() {
+    if (!this.container || !this.renderer || !this.camera) return;
+    const width = this.container.clientWidth;
+    const height = this.container.clientHeight;
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(width, height);
+  }
+
+  bindEvents() {
+    // Preset model selector
+    this.modelSelect?.addEventListener('change', (e) => {
+      this.selectedModelId = e.target.value;
+      if (this.customModelBlobUrl) {
+        URL.revokeObjectURL(this.customModelBlobUrl);
+        this.customModelBlobUrl = null;
+      }
+      this.loadPresetModel(this.selectedModelId);
+      this.generateQrCode();
+    });
+
+    // Custom File Upload
+    this.fileInput?.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      if (!file.name.toLowerCase().endsWith('.glb') && !file.name.toLowerCase().endsWith('.gltf')) {
+        alert("Please upload a valid .glb or .gltf 3D model file.");
+        return;
+      }
+
+      if (this.customModelBlobUrl) {
+        URL.revokeObjectURL(this.customModelBlobUrl);
+      }
+
+      this.customModelBlobUrl = URL.createObjectURL(file);
+      this.selectedModelId = 'custom';
+      this.loadModelFromUrl(this.customModelBlobUrl, file.name);
+      this.generateQrCode();
+    });
+
+    // Configuration Sliders
+    this.scaleInput?.addEventListener('input', (e) => {
+      this.config.scale = parseFloat(e.target.value);
+      if (this.scaleVal) this.scaleVal.textContent = `${this.config.scale.toFixed(2)}x`;
+      this.updateModelTransform();
+      this.generateQrCode();
+    });
+
+    this.heightInput?.addEventListener('input', (e) => {
+      this.config.height = parseFloat(e.target.value);
+      if (this.heightVal) this.heightVal.textContent = `${this.config.height.toFixed(2)} m`;
+      this.updateModelTransform();
+      this.generateQrCode();
+    });
+
+    this.offsetXInput?.addEventListener('input', (e) => {
+      this.config.offsetX = parseFloat(e.target.value);
+      if (this.offsetXVal) this.offsetXVal.textContent = `${this.config.offsetX.toFixed(2)} m`;
+      this.updateModelTransform();
+      this.generateQrCode();
+    });
+
+    this.offsetZInput?.addEventListener('input', (e) => {
+      this.config.offsetZ = parseFloat(e.target.value);
+      if (this.offsetZVal) this.offsetZVal.textContent = `${this.config.offsetZ.toFixed(2)} m`;
+      this.updateModelTransform();
+      this.generateQrCode();
+    });
+
+    this.rotationInput?.addEventListener('input', (e) => {
+      const deg = parseFloat(e.target.value);
+      this.config.rotationY = (deg * Math.PI) / 180.0;
+      if (this.rotationVal) this.rotationVal.textContent = `${deg}°`;
+      this.updateModelTransform();
+      this.generateQrCode();
+    });
+
+    this.autoRotateInput?.addEventListener('change', (e) => {
+      this.config.autoRotate = e.target.checked;
+      this.generateQrCode();
+    });
+
+    // Reset Parameters
+    this.resetBtn?.addEventListener('click', () => {
+      this.config = { ...AR_CONFIG.defaults };
+      this.updateControlsUI();
+      this.updateModelTransform();
+      this.generateQrCode();
+    });
+
+    // Base URL changes
+    this.baseUrlInput?.addEventListener('input', () => {
+      this.generateQrCode();
+    });
+
+    // Download PNG
+    this.btnDownloadPng?.addEventListener('click', () => {
+      this.downloadQrPng();
+    });
+
+    // Launch AR
+    this.btnLaunchAr?.addEventListener('click', () => {
+      const targetUrl = this.buildArUrl();
+      window.open(targetUrl, '_blank');
+    });
+  }
+
+  updateControlsUI() {
+    if (this.scaleInput) this.scaleInput.value = this.config.scale;
+    if (this.scaleVal) this.scaleVal.textContent = `${this.config.scale.toFixed(2)}x`;
+
+    if (this.heightInput) this.heightInput.value = this.config.height;
+    if (this.heightVal) this.heightVal.textContent = `${this.config.height.toFixed(2)} m`;
+
+    if (this.offsetXInput) this.offsetXInput.value = this.config.offsetX;
+    if (this.offsetXVal) this.offsetXVal.textContent = `${this.config.offsetX.toFixed(2)} m`;
+
+    if (this.offsetZInput) this.offsetZInput.value = this.config.offsetZ;
+    if (this.offsetZVal) this.offsetZVal.textContent = `${this.config.offsetZ.toFixed(2)} m`;
+
+    const deg = Math.round((this.config.rotationY * 180) / Math.PI);
+    if (this.rotationInput) this.rotationInput.value = deg;
+    if (this.rotationVal) this.rotationVal.textContent = `${deg}°`;
+
+    if (this.autoRotateInput) this.autoRotateInput.checked = this.config.autoRotate;
+  }
+
+  showLoading(show, percent = 0, text = "Loading 3D Model...") {
+    if (!this.loadingOverlay) return;
+    this.loadingOverlay.style.display = show ? 'flex' : 'none';
+    if (this.loadingBar) this.loadingBar.style.width = `${percent}%`;
+    if (this.loadingText) this.loadingText.textContent = `${text} (${percent}%)`;
+  }
+
+  async loadPresetModel(modelId) {
+    const preset = AR_CONFIG.models[modelId];
+    if (preset) {
+      // Apply preset defaults
+      this.config.scale = preset.scale;
+      this.config.height = preset.height;
+      this.config.offsetX = preset.offsetX || 0;
+      this.config.offsetZ = preset.offsetZ || 0;
+      this.config.rotationY = preset.rotationY || 0;
+      this.config.autoRotate = preset.autoRotate || false;
+      this.updateControlsUI();
+    }
+
+    const blobUrl = getModelBlobUrl(modelId);
+    await this.loadModelFromUrl(blobUrl, preset ? preset.name : modelId);
+  }
+
+  async loadModelFromUrl(url, label) {
+    this.showLoading(true, 10, `Loading ${label}`);
+    try {
+      this.modelLoader.dispose();
+      while (this.anchorGroup.children.length > 0) {
+        this.anchorGroup.remove(this.anchorGroup.children[0]);
+      }
+
+      const model = await this.modelLoader.load(url, (percent) => {
+        this.showLoading(true, percent, `Loading ${label}`);
+      });
+
+      this.previewModel = model;
+      this.anchorGroup.add(model);
+      this.updateModelTransform();
+      this.showLoading(false);
+    } catch (err) {
+      console.error(err);
+      this.showLoading(false);
+      alert("Failed to load 3D model. Please check the file.");
+    }
+  }
+
+  updateModelTransform() {
+    if (!this.previewModel) return;
+
+    // Apply scale
+    this.previewModel.scale.setScalar(this.config.scale);
+
+    // Apply position (Centered on QR Plane, elevated by height)
+    this.previewModel.position.set(
+      this.config.offsetX,
+      this.config.height,
+      this.config.offsetZ
+    );
+
+    // Apply base rotation
+    this.previewModel.rotation.y = this.config.rotationY;
+  }
+
+  buildArUrl() {
+    let baseUrl = this.baseUrlInput ? this.baseUrlInput.value.trim() : this.defaultBaseUrl;
+    if (!baseUrl) baseUrl = this.defaultBaseUrl;
+
+    const url = new URL(baseUrl, window.location.href);
+    url.searchParams.set('id', this.selectedModelId);
+    url.searchParams.set('scale', this.config.scale.toFixed(2));
+    url.searchParams.set('height', this.config.height.toFixed(2));
+    if (this.config.offsetX !== 0) url.searchParams.set('ox', this.config.offsetX.toFixed(2));
+    if (this.config.offsetZ !== 0) url.searchParams.set('oz', this.config.offsetZ.toFixed(2));
+    if (this.config.rotationY !== 0) url.searchParams.set('rot', Math.round((this.config.rotationY * 180) / Math.PI));
+    if (this.config.autoRotate) url.searchParams.set('ar', '1');
+
+    return url.toString();
+  }
+
+  /**
+   * Draw high contrast QR code on canvas with printable framing & instructions
+   */
+  async generateQrCode() {
+    if (!this.qrCanvas) return;
+    const targetUrl = this.buildArUrl();
+
+    if (this.qrUrlText) {
+      this.qrUrlText.textContent = targetUrl;
+      this.qrUrlText.title = targetUrl;
+    }
+
+    try {
+      // Dynamic import or global QRCode generator
+      const QRCode = window.QRCode || (await import('qrcode')).default;
+
+      // Render high resolution QR to temporary canvas
+      const qrSize = 400;
+      const qrTempCanvas = document.createElement('canvas');
+      await QRCode.toCanvas(qrTempCanvas, targetUrl, {
+        width: qrSize,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        },
+        errorCorrectionLevel: 'H' // High error correction level for reliable physical tracking
+      });
+
+      // Composite onto final canvas with card frame, instructions & brand styling
+      const totalWidth = 520;
+      const totalHeight = 640;
+      this.qrCanvas.width = totalWidth;
+      this.qrCanvas.height = totalHeight;
+      const ctx = this.qrCanvas.getContext('2d');
+
+      // Card Background (Pure crisp white with subtle border)
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, totalWidth, totalHeight);
+
+      // Card Header Banner
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(16, 16, totalWidth - 32, 60);
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('CUSTOM WEBAR 3D AR', totalWidth / 2, 44);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillText(`MODEL: ${this.selectedModelId.toUpperCase()}`, totalWidth / 2, 64);
+
+      // Draw QR Code
+      const qrOffset = (totalWidth - qrSize) / 2;
+      ctx.drawImage(qrTempCanvas, qrOffset, 90, qrSize, qrSize);
+
+      // Corner target registration brackets for easier physical alignment
+      ctx.strokeStyle = '#0284c7';
+      ctx.lineWidth = 4;
+      const bracketLen = 25;
+      const bLeft = qrOffset;
+      const bTop = 90;
+      const bRight = qrOffset + qrSize;
+      const bBottom = 90 + qrSize;
+
+      // Top-Left
+      ctx.beginPath();
+      ctx.moveTo(bLeft, bTop + bracketLen);
+      ctx.lineTo(bLeft, bTop);
+      ctx.lineTo(bLeft + bracketLen, bTop);
+      ctx.stroke();
+
+      // Top-Right
+      ctx.beginPath();
+      ctx.moveTo(bRight - bracketLen, bTop);
+      ctx.lineTo(bRight, bTop);
+      ctx.lineTo(bRight, bTop + bracketLen);
+      ctx.stroke();
+
+      // Bottom-Right
+      ctx.beginPath();
+      ctx.moveTo(bRight, bBottom - bracketLen);
+      ctx.lineTo(bRight, bBottom);
+      ctx.lineTo(bRight - bracketLen, bBottom);
+      ctx.stroke();
+
+      // Bottom-Left
+      ctx.beginPath();
+      ctx.moveTo(bLeft + bracketLen, bBottom);
+      ctx.lineTo(bLeft, bBottom);
+      ctx.lineTo(bLeft, bBottom - bracketLen);
+      ctx.stroke();
+
+      // Card Footer Instruction Box
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(16, totalHeight - 120, totalWidth - 32, 104);
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(16, totalHeight - 120, totalWidth - 32, 104);
+
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillText('1. SCAN QR WITH MOBILE CAMERA', totalWidth / 2, totalHeight - 92);
+
+      ctx.fillStyle = '#64748b';
+      ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillText('2. Allow camera access & point camera at this QR code', totalWidth / 2, totalHeight - 68);
+      ctx.fillText('3. Move phone around marker to view 3D model in 360°', totalWidth / 2, totalHeight - 48);
+      ctx.fillText('Recommended print size: 10 × 10 cm or 15 × 15 cm', totalWidth / 2, totalHeight - 28);
+    } catch (err) {
+      console.error("Error generating QR code:", err);
+    }
+  }
+
+  downloadQrPng() {
+    if (!this.qrCanvas) return;
+    const link = document.createElement('a');
+    link.download = `webar-qr-${this.selectedModelId}.png`;
+    link.href = this.qrCanvas.toDataURL('image/png');
+    link.click();
+  }
+
+  animate() {
+    requestAnimationFrame(this.animate);
+    const delta = this.clock.getDelta();
+
+    // Update animations (if any)
+    this.modelLoader.update(delta);
+
+    // Auto-rotation simulation in preview
+    if (this.config.autoRotate && this.previewModel) {
+      this.previewModel.rotation.y += this.config.autoRotateSpeed;
+      if (this.rotationInput) {
+        const deg = Math.round((this.previewModel.rotation.y * 180 / Math.PI) % 360);
+        this.rotationVal.textContent = `${deg}°`;
+      }
+    }
+
+    this.controls.update();
+    this.renderer.render(this.scene, this.camera);
+  }
+}
+
+// Auto-boot when DOM ready
+if (typeof window !== 'undefined') {
+  window.addEventListener('DOMContentLoaded', () => {
+    if (document.getElementById('preview-canvas-container')) {
+      window.generatorStudio = new GeneratorStudio();
+    }
+  });
+}
