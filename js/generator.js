@@ -61,7 +61,8 @@ export class GeneratorStudio {
     this.autoRotateInput = document.getElementById('ctrl-auto-rotate');
     this.resetBtn = document.getElementById('btn-reset-params');
 
-    // QR Output
+    // QR Output & Update Button
+    this.btnUpdateQr = document.getElementById('btn-update-qr');
     this.baseUrlInput = document.getElementById('input-base-url');
     this.qrCanvas = document.getElementById('qr-output-canvas');
     this.qrUrlText = document.getElementById('qr-url-text');
@@ -195,11 +196,12 @@ export class GeneratorStudio {
       }
 
       this.customModelBlobUrl = URL.createObjectURL(file);
-      this.selectedModelId = 'custom';
+      this.customFileName = file.name;
+      this.selectedModelId = file.name.replace(/\.[^/.]+$/, "");
       
       if (this.uploadHint) {
         this.uploadHint.style.display = 'block';
-        this.uploadHint.innerHTML = `✅ <strong>${file.name}</strong> loaded in 3D preview!<br><span style="color:#94a3b8;">For mobile AR, add this file to your GitHub repository <code>models/</code> folder or paste its raw URL above.</span>`;
+        this.uploadHint.innerHTML = `✅ <strong>${file.name}</strong> loaded in 3D preview!<br><span style="color:#94a3b8;">Click <strong>Update &amp; Generate QR Code</strong> to generate the QR marker for this model.</span>`;
       }
 
       this.loadModelFromUrl(this.customModelBlobUrl, file.name);
@@ -259,6 +261,24 @@ export class GeneratorStudio {
     // Base URL changes
     this.baseUrlInput?.addEventListener('input', () => {
       this.generateQrCode();
+    });
+
+    // Update & Generate QR Code Button
+    this.btnUpdateQr?.addEventListener('click', async () => {
+      this.updateModelTransform();
+      await this.generateQrCode();
+      if (this.btnUpdateQr) {
+        const originalHtml = this.btnUpdateQr.innerHTML;
+        this.btnUpdateQr.innerHTML = `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          ✓ QR Code Updated!
+        `;
+        this.btnUpdateQr.style.background = 'linear-gradient(135deg, #059669 0%, #10b981 100%)';
+        setTimeout(() => {
+          this.btnUpdateQr.innerHTML = originalHtml;
+          this.btnUpdateQr.style.background = 'linear-gradient(135deg, #0284c7 0%, #38bdf8 100%)';
+        }, 1800);
+      }
     });
 
     // Download PNG

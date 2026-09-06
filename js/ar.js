@@ -207,7 +207,15 @@ export class ArExperience {
   async load3dModel() {
     this.showLoading(true, 15, "Loading 3D Model...");
     try {
-      const modelSourceUrl = this.customModelUrl || getModelBlobUrl(this.modelId);
+      let modelSourceUrl;
+      if (this.customModelUrl) {
+        modelSourceUrl = this.customModelUrl;
+      } else if (AR_CONFIG.models[this.modelId]) {
+        modelSourceUrl = getModelBlobUrl(this.modelId);
+      } else {
+        modelSourceUrl = `models/${this.modelId}.glb`;
+      }
+
       const model = await this.modelLoader.load(modelSourceUrl, (percent) => {
         this.showLoading(true, percent, "Loading 3D Model...");
       });
